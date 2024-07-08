@@ -31,6 +31,11 @@ def load_ballots() -> pd.DataFrame:
 
 
 def pre_process_ballots(ballots: pd.DataFrame) -> pd.DataFrame:
+    """
+    Pre-process the ballots DataFrame by grouping and summing the data by the town and the polling station.
+    :param ballots: ballots DataFrame
+    :return:
+    """
     ballots = ballots.groupby(['שם ישוב', 'ריכוז']).agg(
         {col: 'sum' for col in ballots.columns if col not in ['שם ישוב', 'ריכוז', 'ברזל']} |
         {'ברזל': 'first'}
@@ -38,7 +43,12 @@ def pre_process_ballots(ballots: pd.DataFrame) -> pd.DataFrame:
     return ballots
 
 
-def extract_options(element_id):
+def extract_options(element_id: str) -> list[str]:
+    """
+    Extract the options from a dropdown list element.
+    :param element_id: the ID of the dropdown list element
+    :return: a list of options extracted from the dropdown list
+    """
     # Click the input to show the dropdown list
     WebDriverWait(driver, 10).until(EC.element_to_be_clickable((By.ID, element_id)))
     input_element = driver.find_element(By.ID, element_id)
@@ -51,6 +61,13 @@ def extract_options(element_id):
 
 
 def safely_interact_with_element(callback, *args, max_attempts=3):
+    """
+    Safely interact with an element by handling StaleElementReferenceException.
+    :param callback: selenium function to interact with the element
+    :param args: arguments to pass to the callback function
+    :param max_attempts: maximum number of attempts to interact with the element
+    :return: callback result
+    """
     attempts = 0
     while attempts < max_attempts:
         try:
@@ -63,6 +80,13 @@ def safely_interact_with_element(callback, *args, max_attempts=3):
 
 
 def extract_towns_ballots():
+    """
+    Extract the towns and the ballots for each town from the website.
+    List of towns is extracted from the 'Town' dropdown list.
+    List of ballots is extracted from the 'PollingStation' dropdown list.
+    The extracted data is saved in the 'data/ballots_location_names' directory.
+    :return:
+    """
     os.mkdir('data/ballots_location_names') if not os.path.exists('data/ballots_location_names') else None
     ballots_location_names = os.listdir('data/ballots_location_names')
 
