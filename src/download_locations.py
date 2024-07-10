@@ -1,5 +1,8 @@
+import googlemaps
 import json
 import os
+
+import numpy as np
 import pandas as pd
 import time
 import selenium
@@ -9,7 +12,6 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
-from selenium.webdriver.common.keys import Keys
 
 chrome_options = Options()
 chrome_options.add_argument('--headless')
@@ -30,16 +32,8 @@ def load_ballots() -> pd.DataFrame:
     return pd.read_csv('data/ballots.csv')
 
 
-def pre_process_ballots(ballots: pd.DataFrame) -> pd.DataFrame:
-    """
-    Pre-process the ballots DataFrame by grouping and summing the data by the town and the polling station.
-    :param ballots: ballots DataFrame
-    :return:
-    """
-    ballots = ballots.groupby(['שם ישוב', 'ריכוז']).agg(
-        {col: 'sum' for col in ballots.columns if col not in ['שם ישוב', 'ריכוז', 'ברזל']} |
-        {'ברזל': 'first'}
-    ).reset_index()
+def preprocess_ballots(ballots: pd.DataFrame) -> pd.DataFrame:
+    ballots['שם ישוב'] = ballots['שם ישוב'].str.replace('  ', ' ')
     return ballots
 
 
@@ -79,6 +73,28 @@ def safely_interact_with_element(callback, *args, max_attempts=3):
     raise Exception("Failed to interact with the element after several attempts.")
 
 
+def select_town(town):
+    town_input = WebDriverWait(driver, 10).until(
+        EC.element_to_be_clickable((By.ID, 'Town')))
+    town_input.clear()
+    town_input.send_keys(town)
+    time.sleep(1)  # Allow time for the autocomplete to populate
+
+    # Wait for the autocomplete suggestions to be visible
+    suggestions_xpath = "//ul[contains(@id, 'awesomplete_list_') and @aria-label='undefined']/li"
+    WebDriverWait(driver, 10).until(
+        EC.visibility_of_element_located((By.XPATH, suggestions_xpath)))
+
+    # Get all suggestions that match the text exactly
+    suggestions = driver.find_elements(By.XPATH, suggestions_xpath)
+    for suggestion in suggestions:
+        if suggestion.text == town:
+            suggestion.click()  # Click the exact match
+            break
+    else:
+        raise Exception(f"No exact match found for {town}")
+
+
 def extract_towns_ballots():
     """
     Extract the towns and the ballots for each town from the website.
@@ -96,32 +112,29 @@ def extract_towns_ballots():
 
     # For each town, extract ballots
     for town in towns:
-        if town == '- בחר ישוב -':
-            continue
-        if f'{town}.json' in ballots_location_names:
+        if town == '- בחר ישוב -' or f'{town}.json' in ballots_location_names:
             print(f'{town} already extracted, skipping...')
             continue
         print(f'Extracting ballots for {town}')
         town_ballots = {'town': town}
         try:
-            def select_town():
-                town_input = WebDriverWait(driver, 10).until(EC.element_to_be_clickable((By.ID, 'Town')))
-                town_input.clear()
-                town_input.send_keys(town)
-                time.sleep(1)  # Allow time for the autocomplete to populate
-                town_input.send_keys(Keys.RETURN)  # To select the town
+            def attempt_select_town():
+                select_town(town)  # Updated to use the new function
 
-            # Use the safely_interact_with_element function to handle stale elements
             flag = False
             while not flag:
-                safely_interact_with_element(select_town)
-                time.sleep(1)
-                # Extract ballots for the selected town
+                # Use the safely_interact_with_element function to handle stale elements
+                safely_interact_with_element(attempt_select_town)
+                time.sleep(1)  # Allow time for the page to update
+
+            # Extract ballots for the selected town
                 ballots = extract_options('PollingStation')
-                if len(ballots) > 1:
-                    flag = True
-                else:
+                if not ballots:
                     print(f'No ballots found for {town}, retrying...')
+                    continue
+                else:
+                    flag = True
+
             print(f'Extracted {len(ballots)} ballots')
             town_ballots['ballots'] = ballots
             with open(f'data/ballots_location_names/{town}.json', 'w', encoding='utf-8') as f:
@@ -137,5 +150,103 @@ def extract_towns_ballots():
     driver.quit()
 
 
+def load_ballots_location_names() -> pd.DataFrame:
+    """
+    Load the extracted towns and ballots from the 'data/ballots_location_names' directory.
+    :return: a DataFrame containing the extracted towns and ballots
+    """
+    ballots_location_names = os.listdir('data/ballots_location_names')
+    towns_ballots = []
+    for file in ballots_location_names:
+        with open(f'data/ballots_location_names/{file}', 'r', encoding='utf-8') as f:
+            town_ballots = json.load(f)
+        for ballot in town_ballots['ballots']:
+            if '- בחר קלפי -' == ballot:
+                continue
+            towns_ballots.append({'שם ישוב': town_ballots['town'], 'location': ballot.split(' קלפי ')[0],
+                                  'ברזל': int(ballot.split(' ')[-1])})
+    ballots_location_df = pd.DataFrame(towns_ballots)
+    return ballots_location_df
+
+
+def merge_meta_ballots():
+    """
+    Merge the ballots and the ballots meta DataFrames.
+    The merged DataFrame is saved in the 'data/ballots_merged.csv' file.
+    :return:
+    """
+    ballots = load_ballots()
+    ballots = preprocess_ballots(ballots)
+    ballots_location_df = load_ballots_location_names()
+    ballots_merged = pd.merge(ballots, ballots_location_df, on=['שם ישוב', 'ברזל'])
+    ballots_merged = ballots_merged.groupby(['שם ישוב', 'ריכוז']).agg(
+        {col: 'sum' for col in ballots_merged.columns if col not in ['שם ישוב', 'ריכוז', 'location']} |
+        {'location': 'first'}
+    ).reset_index()
+    ballots_merged = ballots_merged[ballots_merged['שם ישוב'] != 'מעטפות חיצוניות']
+    ballots_merged.to_csv('data/ballots_merged.csv', index=False)
+
+
+def download_coordination_with_googlemap(ballots: pd.DataFrame):
+    """
+    Download the coordinates of the towns using Google Maps API.
+    The coordinates are saved in the 'data/ballots_with_coordinates.csv' file.
+    :param ballots: a DataFrame containing the towns
+    :return:
+    """
+    # Load the Google Maps API key from the environment variable
+    api_key = os.getenv('GCP_KEY')
+    if api_key is None:
+        raise Exception("Google Maps API key not found. Set the GCP_KEY environment variable.")
+    gmaps = googlemaps.Client(key=api_key)
+    lat = []
+    lng = []
+    for idx, row in ballots.iterrows():
+        try:
+            addres = row['שם ישוב'] + ' ' + row['location']
+            geocode_result = gmaps.geocode(addres)
+            lat.append(geocode_result[0]['geometry']['location']['lat'])
+            lng.append(geocode_result[0]['geometry']['location']['lng'])
+        except Exception as e:
+            print(f'Failed to extract coordinates for {addres}: {e}'
+                  f'\nSkipping to the next ballots...')
+            lat.append(None)
+            lng.append(None)
+            continue
+    ballots['lat'] = lat
+    ballots['lng'] = lng
+    ballots.to_csv('data/ballots_with_coordinates.csv', index=False)
+
+
+def fill_small_town_location():
+    """
+    Fill the missing locations of the small towns.
+    We use the Google Maps API to extract the coordinates of the towns and not the location.
+    The filled DataFrame is saved in the 'data/ballots_with_coordinates_filled.csv' file.
+    :return:
+    """
+    api_key = os.getenv('GCP_KEY')
+    if api_key is None:
+        raise Exception("Google Maps API key not found. Set the GCP_KEY environment variable.")
+    gmaps = googlemaps.Client(key=api_key)
+    ballots = pd.read_csv('data/ballots_with_coordinates.csv')
+    for idx, row in ballots.iterrows():
+        if np.isnan(row['lat']):
+            try:
+                addres = row['שם ישוב']
+                geocode_result = gmaps.geocode(addres)
+                if 'locality' not in geocode_result[0]['types']:
+                    print(f'Failed to extract coordinates for {addres}: {e}'
+                          f'\nSkipping to the next ballots...')
+                    continue
+                ballots.loc[idx, 'lat'] = geocode_result[0]['geometry']['location']['lat']
+                ballots.loc[idx, 'lng'] = geocode_result[0]['geometry']['location']['lng']
+            except Exception as e:
+                print(f'Failed to extract coordinates for {addres}: {e}'
+                      f'\nSkipping to the next ballots...')
+                continue
+    ballots.to_csv('data/ballots_with_coordinates_filled.csv', index=False)
+
+
 if __name__ == '__main__':
-    extract_towns_ballots()
+    fill_small_town_location()
