@@ -1,3 +1,4 @@
 googlemaps
 pandas
+scikit-learn
 selenium

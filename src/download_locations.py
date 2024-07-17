@@ -13,6 +13,8 @@ from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 
+from elecetions_constatns import ElectionsConstants
+
 chrome_options = Options()
 chrome_options.add_argument('--headless')
 chrome_options.add_argument('--no-sandbox')
@@ -29,11 +31,11 @@ driver.get('https://votes25.bechirot.gov.il/ballotresults')
 
 
 def load_ballots() -> pd.DataFrame:
-    return pd.read_csv('data/ballots.csv')
+    return pd.read_csv(ElectionsConstants.RAW_BALLOTS_PATH)
 
 
 def preprocess_ballots(ballots: pd.DataFrame) -> pd.DataFrame:
-    ballots['שם ישוב'] = ballots['שם ישוב'].str.replace('  ', ' ')
+    ballots[ElectionsConstants.TOWN_NAME] = ballots[ElectionsConstants.TOWN_NAME].str.replace('  ', ' ')
     return ballots
 
 
@@ -75,7 +77,7 @@ def safely_interact_with_element(callback, *args, max_attempts=3):
 
 def select_town(town):
     town_input = WebDriverWait(driver, 10).until(
-        EC.element_to_be_clickable((By.ID, 'Town')))
+        EC.element_to_be_clickable((By.ID, ElectionsConstants.TOWN_HTML_ELEMENT)))
     town_input.clear()
     town_input.send_keys(town)
     time.sleep(1)  # Allow time for the autocomplete to populate
@@ -100,15 +102,15 @@ def extract_towns_ballots():
     Extract the towns and the ballots for each town from the website.
     List of towns is extracted from the 'Town' dropdown list.
     List of ballots is extracted from the 'PollingStation' dropdown list.
-    The extracted data is saved in the 'data/ballots_location_names' directory.
+    The extracted data is saved in the ElectionsConstants.BALLOTS_LOCATION_NAMES_PATH directory.
     :return:
     """
-    os.mkdir('data/ballots_location_names') if not os.path.exists('data/ballots_location_names') else None
-    ballots_location_names = os.listdir('data/ballots_location_names')
+    os.mkdir(ElectionsConstants.BALLOTS_LOCATION_NAMES_PATH) if \
+        not os.path.exists(ElectionsConstants.BALLOTS_LOCATION_NAMES_PATH) else None
+    ballots_location_names = os.listdir(ElectionsConstants.BALLOTS_LOCATION_NAMES_PATH)
 
     # Extract towns
-    towns = extract_options('Town')
-
+    towns = extract_options(ElectionsConstants.TOWN_HTML_ELEMENT)
 
     # For each town, extract ballots
     for town in towns:
@@ -116,7 +118,7 @@ def extract_towns_ballots():
             print(f'{town} already extracted, skipping...')
             continue
         print(f'Extracting ballots for {town}')
-        town_ballots = {'town': town}
+        town_ballots = {ElectionsConstants.TOWN: town}
         try:
             def attempt_select_town():
                 select_town(town)  # Updated to use the new function
@@ -128,7 +130,7 @@ def extract_towns_ballots():
                 time.sleep(1)  # Allow time for the page to update
 
             # Extract ballots for the selected town
-                ballots = extract_options('PollingStation')
+                ballots = extract_options(ElectionsConstants.POLLING_STATION_HTML_ELEMENT)
                 if not ballots:
                     print(f'No ballots found for {town}, retrying...')
                     continue
@@ -136,8 +138,8 @@ def extract_towns_ballots():
                     flag = True
 
             print(f'Extracted {len(ballots)} ballots')
-            town_ballots['ballots'] = ballots
-            with open(f'data/ballots_location_names/{town}.json', 'w', encoding='utf-8') as f:
+            town_ballots[ElectionsConstants.BALLOTS] = ballots
+            with open(f'{ElectionsConstants.BALLOTS_LOCATION_NAMES_PATH}/{town}.json', 'w', encoding='utf-8') as f:
                 json.dump(town_ballots, f, ensure_ascii=False, indent=4)
         except Exception as e:
             print(f'Failed to extract ballots for {town}: {e}'
@@ -152,19 +154,20 @@ def extract_towns_ballots():
 
 def load_ballots_location_names() -> pd.DataFrame:
     """
-    Load the extracted towns and ballots from the 'data/ballots_location_names' directory.
+    Load the extracted towns and ballots from the ElectionsConstants.BALLOTS_LOCATION_NAMES_PATH directory.
     :return: a DataFrame containing the extracted towns and ballots
     """
-    ballots_location_names = os.listdir('data/ballots_location_names')
+    ballots_location_names = os.listdir(ElectionsConstants.BALLOTS_LOCATION_NAMES_PATH)
     towns_ballots = []
     for file in ballots_location_names:
-        with open(f'data/ballots_location_names/{file}', 'r', encoding='utf-8') as f:
+        with open(f'{ElectionsConstants.BALLOTS_LOCATION_NAMES_PATH}/{file}', 'r', encoding='utf-8') as f:
             town_ballots = json.load(f)
-        for ballot in town_ballots['ballots']:
+        for ballot in town_ballots[ElectionsConstants.BALLOTS]:
             if '- בחר קלפי -' == ballot:
                 continue
-            towns_ballots.append({'שם ישוב': town_ballots['town'], 'location': ballot.split(' קלפי ')[0],
-                                  'ברזל': int(ballot.split(' ')[-1])})
+            towns_ballots.append({ElectionsConstants.TOWN_NAME: town_ballots[ElectionsConstants.TOWN],
+                                  ElectionsConstants.LOCATION: ballot.split(' קלפי ')[0],
+                                  ElectionsConstants.BALLOT_ID: int(ballot.split(' ')[-1])})
     ballots_location_df = pd.DataFrame(towns_ballots)
     return ballots_location_df
 
@@ -172,25 +175,28 @@ def load_ballots_location_names() -> pd.DataFrame:
 def merge_meta_ballots():
     """
     Merge the ballots and the ballots meta DataFrames.
-    The merged DataFrame is saved in the 'data/ballots_merged.csv' file.
+    The merged DataFrame is saved in the ElectionsConstants.MERGED_BALLOTS_PATH file.
     :return:
     """
     ballots = load_ballots()
     ballots = preprocess_ballots(ballots)
     ballots_location_df = load_ballots_location_names()
-    ballots_merged = pd.merge(ballots, ballots_location_df, on=['שם ישוב', 'ברזל'])
-    ballots_merged = ballots_merged.groupby(['שם ישוב', 'ריכוז']).agg(
-        {col: 'sum' for col in ballots_merged.columns if col not in ['שם ישוב', 'ריכוז', 'location']} |
-        {'location': 'first'}
+    ballots_merged = pd.merge(ballots, ballots_location_df, on=[ElectionsConstants.TOWN_NAME,
+                                                                ElectionsConstants.BALLOT_ID])
+    ballots_merged = ballots_merged.groupby([ElectionsConstants.TOWN_NAME, ElectionsConstants.BALLOTS_CLUSTER]).agg(
+        {col: 'sum' for col in ballots_merged.columns if col not in [ElectionsConstants.TOWN_NAME,
+                                                                     ElectionsConstants.BALLOTS_CLUSTER,
+                                                                     ElectionsConstants.LOCATION]} |
+        {ElectionsConstants.LOCATION: 'first'}
     ).reset_index()
-    ballots_merged = ballots_merged[ballots_merged['שם ישוב'] != 'מעטפות חיצוניות']
-    ballots_merged.to_csv('data/ballots_merged.csv', index=False)
+    ballots_merged = ballots_merged[ballots_merged[ElectionsConstants.TOWN_NAME] != ElectionsConstants.LATE_VOTES]
+    ballots_merged.to_csv(ElectionsConstants.MERGED_BALLOTS_PATH, index=False)
 
 
 def download_coordination_with_googlemap(ballots: pd.DataFrame):
     """
     Download the coordinates of the towns using Google Maps API.
-    The coordinates are saved in the 'data/ballots_with_coordinates.csv' file.
+    The coordinates are saved in the ElectionsConstants.BALLOTS_WITH_COORDINATES_PATH file.
     :param ballots: a DataFrame containing the towns
     :return:
     """
@@ -201,21 +207,43 @@ def download_coordination_with_googlemap(ballots: pd.DataFrame):
     gmaps = googlemaps.Client(key=api_key)
     lat = []
     lng = []
+    localties = []
+    town_localities = []
+    current_town = ''
     for idx, row in ballots.iterrows():
         try:
-            addres = row['שם ישוב'] + ' ' + row['location']
+            if row[ElectionsConstants.TOWN_NAME] != current_town:
+                current_town = row[ElectionsConstants.TOWN_NAME]
+                geocode_result = gmaps.geocode(current_town)
+                town_locality = [x['long_name'] for x in geocode_result[0]['address_components']
+                                 if ElectionsConstants.LOCALITY in x['types']]
+                town_locality = town_locality[0] if len(town_locality) > 0 else None
+            town_localities.append(town_locality)
+        except Exception as e:
+            print(f'Failed to extract coordinates for the town {current_town}: {e}'
+                  f'\nSkipping to the next ballots...')
+            town_localities.append(None)
+        try:
+            addres = row[ElectionsConstants.TOWN_NAME] + ', ' + row[ElectionsConstants.LOCATION]
             geocode_result = gmaps.geocode(addres)
-            lat.append(geocode_result[0]['geometry']['location']['lat'])
-            lng.append(geocode_result[0]['geometry']['location']['lng'])
+            lat.append(geocode_result[0]['geometry'][ElectionsConstants.LOCATION][ElectionsConstants.LAT])
+            lng.append(geocode_result[0]['geometry'][ElectionsConstants.LOCATION][ElectionsConstants.LNG])
+            locality = [x['long_name'] for x in geocode_result[0]['address_components']
+                        if ElectionsConstants.LOCALITY in x['types']]
+            locality = locality[0] if len(locality) > 0 else None
+            localties.append(locality)
         except Exception as e:
             print(f'Failed to extract coordinates for {addres}: {e}'
                   f'\nSkipping to the next ballots...')
             lat.append(None)
             lng.append(None)
+            localties.append(None)
             continue
-    ballots['lat'] = lat
-    ballots['lng'] = lng
-    ballots.to_csv('data/ballots_with_coordinates.csv', index=False)
+    ballots[ElectionsConstants.LAT] = lat
+    ballots[ElectionsConstants.LNG] = lng
+    ballots[ElectionsConstants.LOCALITY] = localties
+    ballots[ElectionsConstants.TOWN_LOCALITY] = town_localities
+    ballots.to_csv(ElectionsConstants.BALLOTS_WITH_COORDINATES_PATH, index=False)
 
 
 def fill_small_town_location():
@@ -229,24 +257,57 @@ def fill_small_town_location():
     if api_key is None:
         raise Exception("Google Maps API key not found. Set the GCP_KEY environment variable.")
     gmaps = googlemaps.Client(key=api_key)
-    ballots = pd.read_csv('data/ballots_with_coordinates.csv')
+    ballots = pd.read_csv(ElectionsConstants.BALLOTS_WITH_COORDINATES_PATH)
+    replace_dict = {'אשדוד': 'Ashdod', 'אשקלון': 'Ashkelon', 'בית שמש': 'Bet Shemesh', 'בני ברק': 'Bnei Brak',
+                    'גבעתיים': "Giv'atayim", 'הרצליה': 'Herzliya', 'חדרה': 'Hadera',
+                    'חולון': 'Holon', 'טבריה': 'Tiberias', 'טייבה': 'Tayibe', 'ירושלים': 'Jerusalem',
+                    'כפר סבא': 'Kefar Sava', 'לוד': 'Lod', 'נצרת': 'Nazareth', 'נתניה': 'Netanya',
+                    'עפולה': 'Afula', 'פתח תקווה': 'Petah Tikva', 'קריית אתא': 'Kiryat Ata',
+                    'ראשון לציון': 'Rishon LeTsiyon', 'רחובות': 'Rehovot',
+                    'רמלה': 'Ramla',
+                    'תל אביב - יפו': 'Tel Aviv-Yafo', 'תל אביב-יפו': 'Tel Aviv-Yafo', 'Tel Aviv-Jaffa': 'Tel Aviv-Yafo',
+                    'Pardes Hana-Karkur': 'Pardes Hanna-Karkur', 'Nazareth Illit': 'Nof HaGalil',
+                    "Modi'in-Maccabim-Re'ut": "Modi'in Makabim-Re'ut", "Ma'alot Tarshiha": "Ma'alot-Tarshiha",
+                    "Kohav Ya'ir": "Kochav Yair Tzur Yigal", "Kisra Sume'a": "Kisra-Sumei",
+                    "Kiryat Motskin": "Kiryat Motzkin", "Hertsliya": "Herzliya", "Beit Shemesh": "Bet Shemesh",
+                    "Beersheba": "Be'er Sheva", 'Akko': 'Acre', "Zihron Ya'akov": "Zikhron Ya'akov",
+                    'Tverya': 'Tiberias', 'Kfar Sava': 'Kefar Sava', 'Nahariya': 'Nahariyya',
+                    'Natsrat Ilit': 'Nof HaGalil',}
+    ballots[ElectionsConstants.LOCALITY] = ballots[ElectionsConstants.LOCALITY].replace(replace_dict)
+    ballots.loc[
+        (ballots[ElectionsConstants.LOCALITY] != ballots[ElectionsConstants.TOWN_LOCALITY])
+        & (ballots[ElectionsConstants.TOWN_LOCALITY].notnull()),
+        [ElectionsConstants.LAT, ElectionsConstants.LNG, ElectionsConstants.LOCALITY]] = None
     for idx, row in ballots.iterrows():
-        if np.isnan(row['lat']):
+        if np.isnan(row[ElectionsConstants.LAT]):
             try:
-                addres = row['שם ישוב']
-                geocode_result = gmaps.geocode(addres)
+                address = row[ElectionsConstants.TOWN_NAME]
+                neighborhood_dict = {'תל אביב יפו': 'תל אביב', 'כרם יבנה ישיבה': 'כרם ביבנה',
+                                     'מודיעיןמכביםרעות': 'מכבים רעות'}
+                if address in neighborhood_dict:
+                    address = neighborhood_dict[address]
+                geocode_result = gmaps.geocode(address)
                 if 'locality' not in geocode_result[0]['types']:
-                    print(f'Failed to extract coordinates for {addres}: {e}'
+                    print(f'Failed to extract coordinates for {address}:'
                           f'\nSkipping to the next ballots...')
                     continue
-                ballots.loc[idx, 'lat'] = geocode_result[0]['geometry']['location']['lat']
-                ballots.loc[idx, 'lng'] = geocode_result[0]['geometry']['location']['lng']
+                ballots.loc[idx, ElectionsConstants.LAT] = \
+                    geocode_result[0]['geometry'][ElectionsConstants.LOCATION][ElectionsConstants.LAT]
+                ballots.loc[idx, ElectionsConstants.LNG] = \
+                    geocode_result[0]['geometry'][ElectionsConstants.LOCATION][ElectionsConstants.LNG]
+                ballots.loc[idx, ElectionsConstants.LOCALITY] = \
+                    [x['long_name'] for x in geocode_result[0]['address_components']
+                     if ElectionsConstants.LOCALITY in x['types']][0]
             except Exception as e:
-                print(f'Failed to extract coordinates for {addres}: {e}'
+                print(f'Failed to extract coordinates for {address}: {e}'
                       f'\nSkipping to the next ballots...')
                 continue
     ballots.to_csv('data/ballots_with_coordinates_filled.csv', index=False)
 
 
 if __name__ == '__main__':
+    # extract_towns_ballots()
+    # merge_meta_ballots()
+    # ballots_merged = pd.read_csv(ElectionsConstants.MERGED_BALLOTS_PATH)
+    # download_coordination_with_googlemap(ballots=ballots_merged)
     fill_small_town_location()
