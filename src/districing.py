@@ -57,7 +57,8 @@ def get_cities_districts(ballots: pd.DataFrame) -> pd.DataFrame:
                 city_ballots = ballots[ballots[ElectionsConstants.TOWN_NAME] == city] \
                     .sort_values(by=ElectionsConstants.REGISTRED_VOTERS, ascending=False)
 
-            while seats_dict[seat_number][ElectionsConstants.REGISTRED_VOTERS] < single_seat:
+            while seats_dict[seat_number][ElectionsConstants.REGISTRED_VOTERS] < single_seat \
+                    * (1 - ElectionsConstants.DISTRICT_VOTE_VARIANCE):
                 if sum(city_ballots[ElectionsConstants.DISTRICT].isnull()) > 0:
                     city_ballots_with_no_district = city_ballots[city_ballots[ElectionsConstants.DISTRICT].isnull()]
                     city_ballots_with_no_district[f'current_distance'] = \
@@ -84,6 +85,8 @@ def get_cities_districts(ballots: pd.DataFrame) -> pd.DataFrame:
                         .sort_values(by=ElectionsConstants.REGISTRED_VOTERS, ascending=False)
                 else:
                     ballots_with_no_district = ballots[ballots[ElectionsConstants.DISTRICT].isnull()]
+                    if len(ballots_with_no_district) == 0:
+                        break
                     ballots_with_no_district[f'current_distance'] = \
                         ((ballots_with_no_district[ElectionsConstants.LAT] -
                           seats_dict[seat_number][ElectionsConstants.LAT])**2 +
@@ -111,10 +114,12 @@ def get_cities_districts(ballots: pd.DataFrame) -> pd.DataFrame:
             seats_dict[seat_number] = {ElectionsConstants.REGISTRED_VOTERS: 0, ElectionsConstants.LAT: -1,
                                        ElectionsConstants.LNG: -1}
 
+    ballots.to_csv(ElectionsConstants.BALLOTS_WITH_DISTRICTS_PATH, index=False)
+
     return ballots
 
 
 if __name__ == "__main__":
     ballots = load_data()
     ballots = pre_process_data(ballots)
-    big_cities_districts = get_cities_districts(ballots)
+    ballots_with_district = get_cities_districts(ballots)

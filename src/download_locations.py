@@ -172,7 +172,7 @@ def load_ballots_location_names() -> pd.DataFrame:
     return ballots_location_df
 
 
-def merge_meta_ballots():
+def merge_ballots_location():
     """
     Merge the ballots and the ballots meta DataFrames.
     The merged DataFrame is saved in the ElectionsConstants.MERGED_BALLOTS_PATH file.
@@ -191,6 +191,46 @@ def merge_meta_ballots():
     ).reset_index()
     ballots_merged = ballots_merged[ballots_merged[ElectionsConstants.TOWN_NAME] != ElectionsConstants.LATE_VOTES]
     ballots_merged.to_csv(ElectionsConstants.MERGED_BALLOTS_PATH, index=False)
+
+
+def load_ballots_with_addresses() -> pd.DataFrame:
+    """
+    Load the ballots with the addresses from the ElectionsConstants.BALLOTS_META_PATH file.
+    :return: a DataFrame containing the ballots with the addresses
+    """
+    return pd.read_csv(ElectionsConstants.BALLOTS_META_PATH)
+
+
+def pre_process_ballots_with_addresses(ballots_addresses: pd.DataFrame) -> pd.DataFrame:
+    """
+    Pre-process the ballots with the addresses DataFrame.
+    Rename the columns and remove duplicates.
+    Change the town name to remove special characters.
+    :param ballots_addresses:
+    :return: Pre-processed DataFrame
+    """
+    ballots_addresses = ballots_addresses.rename(columns={'שם ישוב בחירות': ElectionsConstants.TOWN_NAME, 'סמל רכוז': ElectionsConstants.BALLOTS_CLUSTER})
+    ballots_addresses = ballots_addresses.drop_duplicates(subset=[ElectionsConstants.TOWN_NAME,
+                                                                  ElectionsConstants.BALLOTS_CLUSTER])
+    ballots_addresses[ElectionsConstants.TOWN_NAME] = ballots_addresses[ElectionsConstants.TOWN_NAME].str\
+        .replace('(', '').str.replace(')', '').str.replace("'", "").str.replace('"', '').str.replace('-', '').str\
+        .replace("  ", " ")
+    ballots_addresses[ElectionsConstants.BALLOT_ADDRESS] = ballots_addresses[ElectionsConstants.BALLOT_ADDRESS].str\
+        .replace('(', '').str.replace(')', '')
+    return ballots_addresses
+
+
+def merge_ballots_with_addresses(ballots: pd.DataFrame, ballots_addresses: pd.DataFrame) -> pd.DataFrame:
+    """
+    Merge the ballots with the addresses DataFrames.
+    :param ballots: a DataFrame containing the ballots
+    :param ballots_addresses: a DataFrame containing the ballots with the addresses
+    :return: a DataFrame containing the merged data
+    """
+    return pd.merge(ballots, ballots_addresses[[ElectionsConstants.TOWN_NAME, ElectionsConstants.BALLOTS_CLUSTER,
+                                                ElectionsConstants.BALLOT_ADDRESS]],
+                    on=[ElectionsConstants.TOWN_NAME, ElectionsConstants.BALLOTS_CLUSTER],
+                    how='left')
 
 
 def download_coordination_with_googlemap(ballots: pd.DataFrame):
@@ -224,7 +264,13 @@ def download_coordination_with_googlemap(ballots: pd.DataFrame):
                   f'\nSkipping to the next ballots...')
             town_localities.append(None)
         try:
-            addres = row[ElectionsConstants.TOWN_NAME] + ', ' + row[ElectionsConstants.LOCATION]
+            if not pd.isna(row[ElectionsConstants.BALLOT_ADDRESS]):
+                if row[ElectionsConstants.BALLOT_ADDRESS] == row[ElectionsConstants.TOWN_NAME]:
+                    addres = row[ElectionsConstants.TOWN_NAME]
+                else:
+                    addres = row[ElectionsConstants.TOWN_NAME] + ', ' + row[ElectionsConstants.BALLOT_ADDRESS]
+            else:
+                addres = row[ElectionsConstants.TOWN_NAME] + ', ' + row[ElectionsConstants.LOCATION]
             geocode_result = gmaps.geocode(addres)
             lat.append(geocode_result[0]['geometry'][ElectionsConstants.LOCATION][ElectionsConstants.LAT])
             lng.append(geocode_result[0]['geometry'][ElectionsConstants.LOCATION][ElectionsConstants.LNG])
@@ -272,7 +318,9 @@ def fill_small_town_location():
                     "Kiryat Motskin": "Kiryat Motzkin", "Hertsliya": "Herzliya", "Beit Shemesh": "Bet Shemesh",
                     "Beersheba": "Be'er Sheva", 'Akko': 'Acre', "Zihron Ya'akov": "Zikhron Ya'akov",
                     'Tverya': 'Tiberias', 'Kfar Sava': 'Kefar Sava', 'Nahariya': 'Nahariyya',
-                    'Natsrat Ilit': 'Nof HaGalil',}
+                    'Natsrat Ilit': 'Nof HaGalil', 'Bayt Jan': 'Beit Jann', 'Beit Zait': 'Beit Zayit',
+                    "Binyamina Giv'at Ada": "Binyamina-Giv'at Ada", "Giv'at Shmu'el": "Giv'at Shmuel",
+                    "Jatt": "Gat", "Jat": "Gat", "Daliyat el-Carmel": "Daliyat al-Karmel"}
     ballots[ElectionsConstants.LOCALITY] = ballots[ElectionsConstants.LOCALITY].replace(replace_dict)
     ballots.loc[
         (ballots[ElectionsConstants.LOCALITY] != ballots[ElectionsConstants.TOWN_LOCALITY])
@@ -307,7 +355,10 @@ def fill_small_town_location():
 
 if __name__ == '__main__':
     # extract_towns_ballots()
-    # merge_meta_ballots()
+    # merge_ballots_location()
     # ballots_merged = pd.read_csv(ElectionsConstants.MERGED_BALLOTS_PATH)
+    # ballots_addresses = load_ballots_with_addresses()
+    # ballots_addresses = pre_process_ballots_with_addresses(ballots_addresses)
+    # ballots_merged = merge_ballots_with_addresses(ballots_merged, ballots_addresses)
     # download_coordination_with_googlemap(ballots=ballots_merged)
     fill_small_town_location()

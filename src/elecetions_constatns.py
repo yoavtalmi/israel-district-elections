@@ -3,14 +3,17 @@ from dataclasses import dataclass
 
 @dataclass
 class ElectionsConstants:
+    BALLOT_ADDRESS: str = 'כתובת קלפי'
     BALLOT_ID: str = 'ברזל'
     BALLOTS: str = 'ballots'
     BALLOTS_CLUSTER: str = 'ריכוז'
     BALLOTS_LOCATION_NAMES_PATH: str = "data/ballots_location_names"
+    BALLOTS_META_PATH: str = "data/ballots_meta.csv"
     BALLOTS_WITH_COORDINATES_PATH: str = "data/ballots_with_coordinates.csv"
     BALLOTS_WITH_COORDINATES_FILLED_PATH: str = "data/ballots_with_coordinates_filled.csv"
+    BALLOTS_WITH_DISTRICTS_PATH: str = "data/ballots_with_districts.csv"
     DISTRICT: str = 'district'
-    DISTRICT_VOTE_VARIANCE: float = 0.05
+    DISTRICT_VOTE_VARIANCE: float = 0.02
     LAT: str = 'lat'
     LATE_VOTES: str = 'מעטפות חיצוניות'
     LOCALITY: str = 'locality'
